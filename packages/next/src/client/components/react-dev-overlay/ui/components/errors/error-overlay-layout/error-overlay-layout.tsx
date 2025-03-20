@@ -1,3 +1,4 @@
+import * as React from 'react'
 import type { DebugInfo } from '../../../../types'
 import type { ErrorMessageType } from '../error-message/error-message'
 import type { ErrorType } from '../error-type-label/error-type-label'
@@ -33,6 +34,8 @@ import { ErrorOverlayBottomStack } from '../error-overlay-bottom-stack'
 import type { ErrorBaseProps } from '../error-overlay/error-overlay'
 import type { ReadyRuntimeError } from '../../../../utils/get-error-by-type'
 import { EnvironmentNameLabel } from '../environment-name-label/environment-name-label'
+import { useFocusTrap } from '../dev-tools-indicator/utils'
+import { Fader } from '../../fader'
 
 interface ErrorOverlayLayoutProps extends ErrorBaseProps {
   errorMessage: ErrorMessageType
@@ -80,15 +83,26 @@ export function ErrorOverlayLayout({
     } as React.CSSProperties,
   }
 
+  const faderRef = React.useRef<HTMLDivElement | null>(null)
   const hasFooter = Boolean(footerMessage || errorCode)
+  const dialogRef = React.useRef<HTMLDivElement | null>(null)
+  useFocusTrap(dialogRef, null, rendered)
+
+  function onScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (faderRef.current) {
+      const opacity = clamp(e.currentTarget.scrollTop / 17, [0, 1])
+      faderRef.current.style.opacity = String(opacity)
+    }
+  }
 
   return (
     <ErrorOverlayOverlay fixed={isBuildError} {...animationProps}>
-      <div data-nextjs-dialog-root {...animationProps}>
+      <div data-nextjs-dialog-root ref={dialogRef} {...animationProps}>
         <ErrorOverlayDialog
           onClose={onClose}
           dialogResizerRef={dialogResizerRef}
           data-has-footer={hasFooter}
+          onScroll={onScroll}
         >
           <DialogContent>
             <ErrorOverlayDialogHeader>
@@ -132,9 +146,14 @@ export function ErrorOverlayLayout({
           versionInfo={versionInfo}
           isTurbopack={isTurbopack}
         />
+        <Fader ref={faderRef} side="top" stop="50%" blur="4px" height={48} />
       </div>
     </ErrorOverlayOverlay>
   )
+}
+
+function clamp(value: number, [min, max]: [number, number]) {
+  return Math.min(Math.max(value, min), max)
 }
 
 export const styles = `

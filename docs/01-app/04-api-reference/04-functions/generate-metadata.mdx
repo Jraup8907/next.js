@@ -90,7 +90,7 @@ export async function generateMetadata(
   parent: ResolvingMetadata
 ): Promise<Metadata> {
   // read route params
-  const id = (await params).id
+  const { id } = await params
 
   // fetch data
   const product = await fetch(`https://.../${id}`).then((res) => res.json())
@@ -112,7 +112,7 @@ export default function Page({ params, searchParams }: Props) {}
 ```jsx filename="app/products/[id]/page.js" switcher
 export async function generateMetadata({ params, searchParams }, parent) {
   // read route params
-  const id = (await params).id
+  const { id } = await params
 
   // fetch data
   const product = await fetch(`https://.../${id}`).then((res) => res.json())
@@ -989,6 +989,22 @@ export const metadata = {
 ```html filename="<head> output" hideLineNumbers
 <meta property="fb:admins" content="12345678" />
 <meta property="fb:admins" content="87654321" />
+```
+
+### `pinterest`
+
+You can enable or disable [Pinterest Rich Pins](https://developers.pinterest.com/docs/web-features/rich-pins-overview/) on your webpage.
+
+```jsx filename="layout.js | page.js"
+export const metadata = {
+  pinterest: {
+    richPin: true,
+  },
+}
+```
+
+```html filename="<head> output" hideLineNumbers
+<meta name="pinterest-rich-pin" content="true" />
 ```
 
 ### `other`
