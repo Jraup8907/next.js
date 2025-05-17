@@ -51,7 +51,7 @@ import {
   type ActionStore,
 } from '../../app-render/action-async-storage.external'
 import * as sharedModules from './shared-modules'
-import { getIsServerAction } from '../../lib/server-action-request-meta'
+import { getIsPossibleServerAction } from '../../lib/server-action-request-meta'
 import { RequestCookies } from 'next/dist/compiled/@edge-runtime/cookies'
 import { cleanURL } from './helpers/clean-url'
 import { StaticGenBailoutError } from '../../../client/components/static-generation-bailout'
@@ -82,6 +82,8 @@ import {
 } from '../../../client/components/http-access-fallback/http-access-fallback'
 import { RedirectStatusCode } from '../../../client/components/redirect-status-code'
 import { INFINITE_CACHE } from '../../../lib/constants'
+import { executeRevalidates } from '../../revalidation-utils'
+import { trackPendingModules } from '../../app-render/module-loading/track-module-loading.external'
 
 export class WrappedNextRouterError {
   constructor(
@@ -213,10 +215,11 @@ export class AppRouteRouteModule extends RouteModule<
   constructor({
     userland,
     definition,
+    distDir,
     resolvedPagePath,
     nextConfigOutput,
   }: AppRouteRouteModuleOptions) {
-    super({ userland, definition })
+    super({ userland, definition, distDir })
 
     this.resolvedPagePath = resolvedPagePath
     this.nextConfigOutput = nextConfigOutput
@@ -323,13 +326,9 @@ export class AppRouteRouteModule extends RouteModule<
     }
 
     const resolvePendingRevalidations = () => {
-      context.renderOpts.pendingWaitUntil = Promise.all([
-        workStore.incrementalCache?.revalidateTag(
-          workStore.pendingRevalidatedTags || []
-        ),
-        ...Object.values(workStore.pendingRevalidates || {}),
-        ...(workStore.pendingRevalidateWrites || []),
-      ]).finally(() => {
+      context.renderOpts.pendingWaitUntil = executeRevalidates(
+        workStore
+      ).finally(() => {
         if (process.env.NEXT_PRIVATE_DEBUG_CACHE) {
           console.log(
             'pending revalidates promise finished for:',
@@ -396,6 +395,7 @@ export class AppRouteRouteModule extends RouteModule<
               stale: INFINITE_CACHE,
               tags: [...implicitTags.tags],
               prerenderResumeDataCache: null,
+              hmrRefreshHash: undefined,
             })
 
           let prospectiveResult
@@ -441,6 +441,8 @@ export class AppRouteRouteModule extends RouteModule<
               }
             )
           }
+
+          trackPendingModules(cacheSignal)
           await cacheSignal.cacheReady()
 
           if (prospectiveRenderIsDynamic) {
@@ -481,6 +483,7 @@ export class AppRouteRouteModule extends RouteModule<
             stale: INFINITE_CACHE,
             tags: [...implicitTags.tags],
             prerenderResumeDataCache: null,
+            hmrRefreshHash: undefined,
           })
 
           let responseHandled = false
@@ -670,7 +673,7 @@ export class AppRouteRouteModule extends RouteModule<
 
     const actionStore: ActionStore = {
       isAppRoute: true,
-      isAction: getIsServerAction(req),
+      isAction: getIsPossibleServerAction(req),
     }
 
     const implicitTags = await getImplicitTags(

@@ -192,11 +192,7 @@ describe('app dir - css', () => {
         const $ = await next.render$('/loading-bug/hi')
         // The link tag should be hoist into head with precedence properties
         const styles = $('head link[data-precedence]').length
-        if (process.env.TURBOPACK && !isNextDev) {
-          expect(styles).toBe(3)
-        } else {
-          expect(styles).toBe(2)
-        }
+        expect(styles).toBe(2)
 
         expect($('body h2').text()).toBe('Loading...')
       })
@@ -313,11 +309,7 @@ describe('app dir - css', () => {
             /<link rel="stylesheet" href="[^<]+\.css(\?v=\d+)?"/g
           ),
         ].length
-        if (process.env.TURBOPACK && !isNextDev) {
-          expect(stylesheets).toBe(5)
-        } else {
-          expect(stylesheets).toBe(3)
-        }
+        expect(stylesheets).toBe(3)
       })
     })
 
@@ -382,7 +374,7 @@ describe('app dir - css', () => {
       })
 
       // Turbopack doesn't preload styles
-      if (!process.env.TURBOPACK) {
+      if (!process.env.IS_TURBOPACK_TEST) {
         it('should not preload styles twice during HMR', async () => {
           const filePath = 'app/hmr/page.js'
           const origContent = await next.readFile(filePath)
@@ -490,7 +482,7 @@ describe('app dir - css', () => {
         it('should only include the same style once in the flight data', async () => {
           const initialHtml = await next.render('/css/css-duplicate-2/server')
 
-          if (process.env.TURBOPACK) {
+          if (process.env.IS_TURBOPACK_TEST) {
             expect(
               initialHtml.match(/app_css_css-duplicate-2_[\w]+\.css/g).length
             ).toBe(5)

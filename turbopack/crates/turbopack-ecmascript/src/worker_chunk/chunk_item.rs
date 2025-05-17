@@ -4,20 +4,20 @@ use turbo_rcstr::RcStr;
 use turbo_tasks::{ResolvedVc, TryJoinIterExt, Value, Vc};
 use turbopack_core::{
     chunk::{
-        availability_info::AvailabilityInfo, ChunkData, ChunkItem, ChunkType, ChunkingContext,
-        ChunkingContextExt, ChunksData,
+        ChunkData, ChunkItem, ChunkType, ChunkingContext, ChunkingContextExt, ChunksData,
+        availability_info::AvailabilityInfo,
     },
     ident::AssetIdent,
     module::Module,
-    module_graph::{chunk_group_info::ChunkGroup, ModuleGraph},
+    module_graph::{ModuleGraph, chunk_group_info::ChunkGroup},
     output::OutputAssets,
 };
 
 use super::module::WorkerLoaderModule;
 use crate::{
     chunk::{
-        data::EcmascriptChunkData, EcmascriptChunkItem, EcmascriptChunkItemContent,
-        EcmascriptChunkType,
+        EcmascriptChunkItem, EcmascriptChunkItemContent, EcmascriptChunkType,
+        data::EcmascriptChunkData,
     },
     runtime_functions::{TURBOPACK_EXPORT_VALUE, TURBOPACK_WORKER_BLOB_URL},
     utils::StringifyJs,
@@ -42,11 +42,7 @@ impl WorkerLoaderChunkItem {
         let module = self.module.await?;
 
         Ok(self.chunking_context.evaluated_chunk_group_assets(
-            AssetIdent::from_path(
-                self.chunking_context
-                    .chunk_path(module.inner.ident(), ".js".into()),
-            )
-            .with_modifier(worker_modifier()),
+            module.inner.ident().with_modifier(worker_modifier()),
             ChunkGroup::Isolated(ResolvedVc::upcast(module.inner)),
             *self.module_graph,
             Value::new(AvailabilityInfo::Root),

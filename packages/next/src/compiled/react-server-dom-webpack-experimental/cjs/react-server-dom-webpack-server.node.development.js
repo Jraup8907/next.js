@@ -354,6 +354,12 @@
       var owner = componentStorage.getStore();
       return owner ? owner : null;
     }
+    function resetOwnerStackLimit() {
+      var now = getCurrentTime();
+      1e3 < now - lastResetTime &&
+        ((ReactSharedInternalsServer.recentlyCreatedOwnerStacks = 0),
+        (lastResetTime = now));
+    }
     function isObjectPrototype(object) {
       if (!object) return !1;
       var ObjectPrototype = Object.prototype;
@@ -752,6 +758,58 @@
       pingedTasks.push(model);
     }
     function noop() {}
+    function createRequest(
+      model,
+      bundlerConfig,
+      onError,
+      identifierPrefix,
+      onPostpone,
+      temporaryReferences,
+      environmentName,
+      filterStackFrame
+    ) {
+      resetOwnerStackLimit();
+      return new RequestInstance(
+        20,
+        model,
+        bundlerConfig,
+        onError,
+        identifierPrefix,
+        onPostpone,
+        temporaryReferences,
+        environmentName,
+        filterStackFrame,
+        noop,
+        noop
+      );
+    }
+    function createPrerenderRequest(
+      model,
+      bundlerConfig,
+      onAllReady,
+      onFatalError,
+      onError,
+      identifierPrefix,
+      onPostpone,
+      temporaryReferences,
+      environmentName,
+      filterStackFrame
+    ) {
+      resetOwnerStackLimit();
+      return new RequestInstance(
+        PRERENDER,
+        model,
+        bundlerConfig,
+        onError,
+        identifierPrefix,
+        onPostpone,
+        temporaryReferences,
+        environmentName,
+        filterStackFrame,
+        onAllReady,
+        onFatalError
+      );
+    }
     function resolveRequest() {
       if (currentRequest) return currentRequest;
       var store = requestStorage.getStore();
@@ -821,10 +879,11 @@
       function progress(entry) {
         if (!aborted)
           if (entry.done)
-            request.abortListeners.delete(abortStream),
-              (entry = streamTask.id.toString(16) + ":C\n"),
+            (entry = streamTask.id.toString(16) + ":C\n"),
               request.completedRegularChunks.push(entry),
               enqueueFlush(request),
+              request.abortListeners.delete(abortStream),
+              callOnAllReadyIfReady(request),
               (aborted = !0);
           else
             try {
@@ -886,7 +945,6 @@
       function progress(entry) {
         if (!aborted)
           if (entry.done) {
-            request.abortListeners.delete(abortIterable);
             if (void 0 === entry.value)
               var endStreamRow = streamTask.id.toString(16) + ":C\n";
             else
@@ -903,6 +961,8 @@
               }
             request.completedRegularChunks.push(endStreamRow);
             enqueueFlush(request);
+            request.abortListeners.delete(abortIterable);
+            callOnAllReadyIfReady(request);
             aborted = !0;
           } else
             try {
@@ -2545,7 +2605,6 @@
     }
     function erroredTask(request, task, error) {
       task.timed && emitTimingChunk(request, task.id, performance.now());
-      request.abortableTasks.delete(task);
       task.status = ERRORED$1;
       if (
         "object" === typeof error &&
@@ -2558,6 +2617,8 @@
         var digest = logRecoverableError(request, error, task);
         emitErrorChunk(request, task.id, digest, error);
       }
+      request.abortableTasks.delete(task);
+      callOnAllReadyIfReady(request);
     }
     function retryTask(request, task) {
       if (task.status === PENDING$1) {
@@ -2592,8 +2653,9 @@
             var json = stringify(resolvedModel);
             emitModelChunk(request, task.id, json);
           }
-          request.abortableTasks.delete(task);
           task.status = COMPLETED;
+          request.abortableTasks.delete(task);
+          callOnAllReadyIfReady(request);
         } catch (thrownValue) {
           if (request.status === ABORTING)
             if (
@@ -2641,7 +2703,6 @@
       ReactSharedInternalsServer.H = HooksDispatcher;
       var prevRequest = currentRequest;
       currentRequest$1 = currentRequest = request;
-      var hadAbortableTasks = 0 < request.abortableTasks.size;
       try {
         var pingedTasks = request.pingedTasks;
         request.pingedTasks = [];
@@ -2649,10 +2710,6 @@
           retryTask(request, pingedTasks[i]);
         null !== request.destination &&
           flushCompletedChunks(request, request.destination);
-        if (hadAbortableTasks && 0 === request.abortableTasks.size) {
-          var onAllReady = request.onAllReady;
-          onAllReady();
-        }
       } catch (error) {
         logRecoverableError(request, error, null), fatalError(request, error);
       } finally {
@@ -2754,6 +2811,13 @@
           destination && flushCompletedChunks(request, destination);
         }));
     }
+    function callOnAllReadyIfReady(request) {
+      if (
+        0 === request.abortableTasks.size &&
+        0 === request.abortListeners.size
+      )
+        request.onAllReady();
+    }
     function startFlowing(request, destination) {
       if (request.status === CLOSING)
         (request.status = CLOSED), destination.destroy(request.fatalError);
@@ -2812,8 +2876,7 @@
             });
           }
           abortableTasks.clear();
-          var onAllReady = request.onAllReady;
-          onAllReady();
+          callOnAllReadyIfReady(request);
         }
         var abortListeners = request.abortListeners;
         if (0 < abortListeners.size) {
@@ -2837,6 +2900,7 @@
             return callback(_error);
           });
           abortListeners.clear();
+          callOnAllReadyIfReady(request);
         }
         null !== request.destination &&
           flushCompletedChunks(request, request.destination);
@@ -3960,7 +4024,6 @@
         }
       };
     HooksDispatcher.useEffectEvent = unsupportedHook;
-    HooksDispatcher.useSwipeTransition = unsupportedHook;
     var currentOwner = null,
       DefaultAsyncDispatcher = {
         getCacheForType: function (resourceType) {
@@ -3980,6 +4043,21 @@
       );
     var prefix, suffix;
     new ("function" === typeof WeakMap ? WeakMap : Map)();
+    var lastResetTime = 0;
+    if (
+      "object" === typeof performance &&
+      "function" === typeof performance.now
+    ) {
+      var localPerformance = performance;
+      var getCurrentTime = function () {
+        return localPerformance.now();
+      };
+    } else {
+      var localDate = Date;
+      getCurrentTime = function () {
+        return localDate.now();
+      };
+    }
     var callComponent = {
         "react-stack-bottom-frame": function (
           Component,
@@ -4235,8 +4313,7 @@
       });
     };
     exports.renderToPipeableStream = function (model, webpackMap, options) {
-      var request = new RequestInstance(
-          20,
+      var request = createRequest(
           model,
           webpackMap,
           options ? options.onError : void 0,
@@ -4244,9 +4321,7 @@
           options ? options.onPostpone : void 0,
           options ? options.temporaryReferences : void 0,
           options ? options.environmentName : void 0,
-          options ? options.filterStackFrame : void 0,
-          noop,
-          noop
+          options ? options.filterStackFrame : void 0
         ),
         hasStartedFlowing = !1;
       startWork(request);
@@ -4283,16 +4358,9 @@
       options
     ) {
       return new Promise(function (resolve, reject) {
-        var request = new RequestInstance(
-          PRERENDER,
+        var request = createPrerenderRequest(
           model,
           webpackMap,
-          options ? options.onError : void 0,
-          options ? options.identifierPrefix : void 0,
-          options ? options.onPostpone : void 0,
-          options ? options.temporaryReferences : void 0,
-          options ? options.environmentName : void 0,
-          options ? options.filterStackFrame : void 0,
           function () {
             var readable = new stream.Readable({
                 read: function () {
@@ -4302,7 +4370,13 @@
               writable = createFakeWritable(readable);
             resolve({ prelude: readable });
           },
-          reject
+          reject,
+          options ? options.onError : void 0,
+          options ? options.identifierPrefix : void 0,
+          options ? options.onPostpone : void 0,
+          options ? options.temporaryReferences : void 0,
+          options ? options.environmentName : void 0,
+          options ? options.filterStackFrame : void 0
         );
         if (options && options.signal) {
           var signal = options.signal;

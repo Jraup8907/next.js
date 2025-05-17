@@ -7,28 +7,28 @@ const defaultCacheHandler =
  * @type {import('next/dist/server/lib/cache-handlers/types').CacheHandlerV2}
  */
 const cacheHandler = {
-  async get(cacheKey) {
-    console.log('CustomCacheHandler::get', cacheKey)
-    return defaultCacheHandler.get(cacheKey)
+  async get(cacheKey, softTags) {
+    console.log('ModernCustomCacheHandler::get', cacheKey, softTags)
+    return defaultCacheHandler.get(cacheKey, softTags)
   },
 
   async set(cacheKey, pendingEntry) {
-    console.log('CustomCacheHandler::set', cacheKey)
+    console.log('ModernCustomCacheHandler::set', cacheKey)
     return defaultCacheHandler.set(cacheKey, pendingEntry)
   },
 
   async refreshTags() {
-    console.log('CustomCacheHandler::refreshTags')
+    console.log('ModernCustomCacheHandler::refreshTags')
     return defaultCacheHandler.refreshTags()
   },
 
   async getExpiration(...tags) {
-    console.log('CustomCacheHandler::getExpiration', JSON.stringify(tags))
+    console.log('ModernCustomCacheHandler::getExpiration', JSON.stringify(tags))
     return defaultCacheHandler.getExpiration(...tags)
   },
 
   async expireTags(...tags) {
-    console.log('CustomCacheHandler::expireTags', JSON.stringify(tags))
+    console.log('ModernCustomCacheHandler::expireTags', JSON.stringify(tags))
     return defaultCacheHandler.expireTags(...tags)
   },
 }

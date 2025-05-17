@@ -2,22 +2,25 @@ use std::iter::once;
 
 use anyhow::Result;
 use turbo_rcstr::RcStr;
-use turbo_tasks::{FxIndexMap, ResolvedVc, Value, Vc};
+use turbo_tasks::{FxIndexMap, OptionVcExt, ResolvedVc, Value, Vc};
 use turbo_tasks_env::EnvMap;
 use turbo_tasks_fs::FileSystemPath;
 use turbopack::{
     css::chunk::CssChunkType,
     module_options::{
-        module_options_context::ModuleOptionsContext, CssOptionsContext, EcmascriptOptionsContext,
-        JsxTransformOptions, ModuleRule, TypeofWindow, TypescriptTransformOptions,
+        CssOptionsContext, EcmascriptOptionsContext, JsxTransformOptions, ModuleRule, TypeofWindow,
+        TypescriptTransformOptions, module_options_context::ModuleOptionsContext,
     },
     resolve_options_context::ResolveOptionsContext,
 };
-use turbopack_browser::{react_refresh::assert_can_resolve_react_refresh, BrowserChunkingContext};
+use turbopack_browser::{
+    BrowserChunkingContext, ContentHashing, CurrentChunkMethod,
+    react_refresh::assert_can_resolve_react_refresh,
+};
 use turbopack_core::{
     chunk::{
-        module_id_strategies::ModuleIdStrategy, ChunkingConfig, ChunkingContext, MinifyType,
-        SourceMapsType,
+        ChunkingConfig, ChunkingContext, MangleType, MinifyType, SourceMapsType,
+        module_id_strategies::ModuleIdStrategy,
     },
     compile_time_info::{
         CompileTimeDefineValue, CompileTimeDefines, CompileTimeInfo, DefineableNameSegment,
@@ -46,8 +49,8 @@ use crate::{
     },
     next_shared::{
         resolve::{
-            get_invalid_server_only_resolve_plugin, ModuleFeatureReportResolvePlugin,
-            NextSharedRuntimeResolvePlugin,
+            ModuleFeatureReportResolvePlugin, NextSharedRuntimeResolvePlugin,
+            get_invalid_server_only_resolve_plugin,
         },
         transforms::{
             emotion::get_emotion_transform_rule,
@@ -169,7 +172,7 @@ pub async fn get_client_resolve_options_context(
             .to_resolved()
             .await?;
     let custom_conditions = vec![mode.await?.condition().into()];
-    let module_options_context = ResolveOptionsContext {
+    let resolve_options_context = ResolveOptionsContext {
         enable_node_modules: Some(project_path.root().to_resolved().await?),
         custom_conditions,
         import_map: Some(next_client_import_map),
@@ -201,16 +204,24 @@ pub async fn get_client_resolve_options_context(
         )],
         ..Default::default()
     };
+
     Ok(ResolveOptionsContext {
         enable_typescript: true,
         enable_react: true,
         enable_mjs_extension: true,
         custom_extensions: next_config.resolve_extension().owned().await?,
+        tsconfig_path: next_config
+            .typescript_tsconfig_path()
+            .await?
+            .as_ref()
+            .map(|p| project_path.join(p.to_owned()))
+            .to_resolved()
+            .await?,
         rules: vec![(
             foreign_code_context_condition(next_config, project_path).await?,
-            module_options_context.clone().resolved_cell(),
+            resolve_options_context.clone().resolved_cell(),
         )],
-        ..module_options_context
+        ..resolve_options_context
     }
     .cell())
 }
@@ -318,22 +329,19 @@ pub async fn get_client_module_options_context(
     let enable_postcss_transform = Some(postcss_transform_options.resolved_cell());
     let enable_foreign_postcss_transform = Some(postcss_foreign_transform_options.resolved_cell());
 
+    let source_maps = if *next_config.client_source_maps(mode).await? {
+        SourceMapsType::Full
+    } else {
+        SourceMapsType::None
+    };
     let module_options_context = ModuleOptionsContext {
         ecmascript: EcmascriptOptionsContext {
             enable_typeof_window_inlining: Some(TypeofWindow::Object),
-            source_maps: if *next_config.turbo_source_maps().await? {
-                SourceMapsType::Full
-            } else {
-                SourceMapsType::None
-            },
+            source_maps,
             ..Default::default()
         },
         css: CssOptionsContext {
-            source_maps: if *next_config.turbo_source_maps().await? {
-                SourceMapsType::Full
-            } else {
-                SourceMapsType::None
-            },
+            source_maps,
             ..Default::default()
         },
         preset_env_versions: Some(env),
@@ -349,6 +357,8 @@ pub async fn get_client_module_options_context(
     let foreign_codes_options_context = ModuleOptionsContext {
         ecmascript: EcmascriptOptionsContext {
             enable_typeof_window_inlining: None,
+            // Ignore e.g. import(`${url}`) requests in node_modules.
+            ignore_dynamic_requests: true,
             ..module_options_context.ecmascript
         },
         enable_webpack_loaders: foreign_enable_webpack_loaders,
@@ -386,7 +396,7 @@ pub async fn get_client_module_options_context(
         css: CssOptionsContext {
             minify_type: if *next_config.turbo_minify(mode).await? {
                 MinifyType::Minify {
-                    mangle: !*no_mangling.await?,
+                    mangle: (!*no_mangling.await?).then_some(MangleType::OptimalSize),
                 }
             } else {
                 MinifyType::NoMinify
@@ -443,7 +453,7 @@ pub async fn get_client_chunking_context(
     .chunk_suffix_path(chunk_suffix_path)
     .minify_type(if *minify.await? {
         MinifyType::Minify {
-            mangle: !*no_mangling.await?,
+            mangle: (!*no_mangling.await?).then_some(MangleType::OptimalSize),
         }
     } else {
         MinifyType::NoMinify
@@ -454,6 +464,7 @@ pub async fn get_client_chunking_context(
         SourceMapsType::None
     })
     .asset_base_path(asset_prefix)
+    .current_chunk_method(CurrentChunkMethod::DocumentCurrentScript)
     .module_id_strategy(module_id_strategy);
 
     if next_mode.is_development() {
@@ -471,10 +482,11 @@ pub async fn get_client_chunking_context(
         builder = builder.chunking_config(
             Vc::<CssChunkType>::default().to_resolved().await?,
             ChunkingConfig {
-                min_chunk_size: 0,
+                max_merge_chunk_size: 100_000,
                 ..Default::default()
             },
         );
+        builder = builder.use_content_hashing(ContentHashing::Direct { length: 16 })
     }
 
     Ok(Vc::upcast(builder.build()))

@@ -1,5 +1,5 @@
 import type { OverlayState } from '../shared'
-import type { GlobalErrorComponent } from '../../error-boundary'
+import type { GlobalErrorComponent } from '../../global-error'
 
 import { useCallback, useEffect, useState } from 'react'
 import { AppDevOverlayErrorBoundary } from './app-dev-overlay-error-boundary'
@@ -52,10 +52,10 @@ function ReplaySsrOnlyErrors({
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useEffect(() => {
       if (ssrError !== null) {
-        // TODO(veil): Produces wrong Owner Stack
+        // TODO(veil): Include original Owner Stack (NDX-905)
         // TODO(veil): Mark as recoverable error
         // TODO(veil): console.error
-        handleClientError(ssrError, [])
+        handleClientError(ssrError)
 
         // If it's missing root tags, we can't recover, make it blocking.
         if (ssrError.digest === MISSING_ROOT_TAGS_ERROR) {

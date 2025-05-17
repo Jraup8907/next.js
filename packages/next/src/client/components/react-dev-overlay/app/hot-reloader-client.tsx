@@ -38,15 +38,15 @@ import type {
   TurbopackMsgToBrowser,
 } from '../../../../server/dev/hot-reloader-types'
 import { REACT_REFRESH_FULL_RELOAD_FROM_ERROR } from '../shared'
-import type { HydrationErrorState } from '../../errors/hydration-error-info'
 import type { DebugInfo } from '../types'
 import { useUntrackedPathname } from '../../navigation-untracked'
-import { getReactStitchedError } from '../../errors/stitched-error'
+import { getComponentStack, getOwnerStack } from '../../errors/stitched-error'
 import { handleDevBuildIndicatorHmrEvents } from '../../../dev/dev-build-indicator/internal/handle-dev-build-indicator-hmr-events'
-import type { GlobalErrorComponent } from '../../error-boundary'
+import type { GlobalErrorComponent } from '../../global-error'
 import type { DevIndicatorServerState } from '../../../../server/dev/dev-indicator-server-state'
 import reportHmrLatency from '../utils/report-hmr-latency'
 import { TurbopackHmr } from '../utils/turbopack-hot-reloader-common'
+import { NEXT_HMR_REFRESH_HASH_COOKIE } from '../../app-router-headers'
 
 export interface Dispatcher {
   onBuildOk(): void
@@ -267,7 +267,9 @@ function processMessage(
           sendMessage,
           [...hmrUpdate.updatedModules],
           hmrUpdate.startMsSinceEpoch,
-          hmrUpdate.endMsSinceEpoch
+          hmrUpdate.endMsSinceEpoch,
+          // suppress the `client-hmr-latency` event if the update was a no-op:
+          hmrUpdate.hasUpdates
         )
       }
       dispatcher.onBuildOk()
@@ -301,8 +303,8 @@ function processMessage(
       } else {
         webpackStartMsSinceEpoch = Date.now()
         setPendingHotUpdateWebpack()
+        console.log('[Fast Refresh] rebuilding')
       }
-      console.log('[Fast Refresh] rebuilding')
       break
     }
     case HMR_ACTIONS_SENT_TO_BROWSER.BUILT:
@@ -385,21 +387,22 @@ function processMessage(
       break
     }
     case HMR_ACTIONS_SENT_TO_BROWSER.TURBOPACK_MESSAGE: {
+      turbopackHmr!.onTurbopackMessage(obj)
       dispatcher.onBeforeRefresh()
       processTurbopackMessage({
         type: HMR_ACTIONS_SENT_TO_BROWSER.TURBOPACK_MESSAGE,
         data: obj.data,
       })
-      dispatcher.onRefresh()
       if (RuntimeErrorHandler.hadRuntimeError) {
         console.warn(REACT_REFRESH_FULL_RELOAD_FROM_ERROR)
         performFullReload(null, sendMessage)
       }
-      turbopackHmr!.onTurbopackMessage(obj)
+      dispatcher.onRefresh()
       break
     }
     // TODO-APP: make server component change more granular
     case HMR_ACTIONS_SENT_TO_BROWSER.SERVER_COMPONENT_CHANGES: {
+      turbopackHmr?.onServerComponentChanges()
       sendMessage(
         JSON.stringify({
           event: 'server-component-reload-page',
@@ -410,7 +413,7 @@ function processMessage(
 
       // Store the latest hash in a session cookie so that it's sent back to the
       // server with any subsequent requests.
-      document.cookie = `__next_hmr_refresh_hash__=${obj.hash}`
+      document.cookie = `${NEXT_HMR_REFRESH_HASH_COOKIE}=${obj.hash}`
 
       if (RuntimeErrorHandler.hadRuntimeError) {
         if (reloading) return
@@ -433,6 +436,7 @@ function processMessage(
       return
     }
     case HMR_ACTIONS_SENT_TO_BROWSER.RELOAD_PAGE: {
+      turbopackHmr?.onReloadPage()
       sendMessage(
         JSON.stringify({
           event: 'client-reload-page',
@@ -445,6 +449,7 @@ function processMessage(
     }
     case HMR_ACTIONS_SENT_TO_BROWSER.ADDED_PAGE:
     case HMR_ACTIONS_SENT_TO_BROWSER.REMOVED_PAGE: {
+      turbopackHmr?.onPageAddRemove()
       // TODO-APP: potentially only refresh if the currently viewed page was added/removed.
       return router.hmrRefresh()
     }
@@ -511,35 +516,30 @@ export default function HotReload({
 
   const handleOnUnhandledError = useCallback(
     (error: Error): void => {
-      const errorDetails = (error as any).details as
-        | HydrationErrorState
-        | undefined
       // Component stack is added to the error in use-error-handler in case there was a hydration error
-      const componentStackTrace =
-        (error as any)._componentStack || errorDetails?.componentStack
-      const warning = errorDetails?.warning
+      const componentStack = getComponentStack(error)
+      const ownerStack = getOwnerStack(error)
 
       dispatch({
         type: ACTION_UNHANDLED_ERROR,
         reason: error,
-        frames: parseStack(error.stack || ''),
+        frames: parseStack((error.stack || '') + (ownerStack || '')),
         componentStackFrames:
-          typeof componentStackTrace === 'string'
-            ? parseComponentStack(componentStackTrace)
+          typeof componentStack === 'string'
+            ? parseComponentStack(componentStack)
             : undefined,
-        warning,
       })
     },
     [dispatch]
   )
 
   const handleOnUnhandledRejection = useCallback(
-    (reason: Error): void => {
-      const stitchedError = getReactStitchedError(reason)
+    (error: Error): void => {
+      const ownerStack = getOwnerStack(error)
       dispatch({
         type: ACTION_UNHANDLED_REJECTION,
-        reason: stitchedError,
-        frames: parseStack(stitchedError.stack || ''),
+        reason: error,
+        frames: parseStack((error.stack || '') + (ownerStack || '')),
       })
     },
     [dispatch]
